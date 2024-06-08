@@ -2,86 +2,91 @@ import pickle
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
+from fastapi import FastAPI
+from starlette.responses import RedirectResponse
 
+app = FastAPI()
 
-def get_anime_poster(anime_id,anime_list):
-    # Send a GET request to the anime page
-    anime_url = f"https://myanimelist.net/anime/{anime_id}/{anime_list}"
-    response = requests.get(anime_url)
+@app.get("/")
+async def read_root():
+    return {"Hello": "World"}
 
-    # Check if the request was successful
-    if response.status_code == 200:
-        # Parse the HTML content of the page
+@app.get("/favicon.ico")
+async def favicon():
+    return RedirectResponse(url="/")
+
+def get_anime_poster(anime_id):
+    if not anime_id:
+        print("Anime ID is None.")
+        return None
+
+    anime_url = f"https://myanimelist.net/anime/{anime_id}"
+    try:
+        response = requests.get(anime_url)
+        response.raise_for_status()
+
         soup = BeautifulSoup(response.content, 'html.parser')
+        poster_img = soup.find('img', {'class': 'lazyload'})
 
-        # Find the poster image element
-        poster_img = soup.find('img', class_='ac')
-
-        # Check if the poster image element exists
         if poster_img:
-            if 'src' in poster_img.attrs:
-                poster_url = poster_img['src']
+            poster_url = poster_img.get('data-src') or poster_img.get('src')
+            if poster_url:
+                return poster_url
             else:
-                # If 'src' attribute is not present, try 'data-src'
-                poster_url = poster_img.get('data-src')
-
-            return poster_url
-
+                print("Poster URL not found in image attributes.")
+                return None
         else:
-             print("Poster image not found.")
-    else:
-        print("Failed to retrieve anime page.")
-
-
-# Example usage
-
-# poster_url = get_anime_poster(anime_url)
-# if poster_url:
-#     print("Poster URL:", poster_url)
-
+            print("Poster image not found.")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to retrieve anime page. Error: {e}")
+        return None
 
 def recommend(anime):
-    index = animes[animes['name'] == anime].index[0]
+    try:
+        index = animes[animes['name'] == anime].index[0]
+    except IndexError:
+        print(f"Anime '{anime}' not found in the list.")
+        return [], []
+
     distances = sorted(list(enumerate(similarity[index])), reverse=True, key=lambda x: x[1])
+    
     recommended_anime_names = []
     recommended_anime_posters = []
+    
     for i in distances[1:6]:
-        # fetch the movie poster
-        anime_id = animes.iloc[i[0]].anime_id
-        recommended_anime_posters.append(get_anime_poster(anime_id,anime_list))
-        recommended_anime_names.append(animes.iloc[i[0]]['name'])
+        anime_id = animes.iloc[i[0]]['anime_id']
+        if anime_id:
+            poster_url = get_anime_poster(anime_id)
+            if poster_url:
+                recommended_anime_posters.append(poster_url)
+                recommended_anime_names.append(animes.iloc[i[0]]['name'])
+            else:
+                recommended_anime_posters.append(None)
+                recommended_anime_names.append(animes.iloc[i[0]]['name'])
+        else:
+            print(f"Anime ID not found for index {i[0]}")
 
-    return recommended_anime_names,recommended_anime_posters
-
-
+    return recommended_anime_names, recommended_anime_posters
 
 st.header('Anime Recommender System')
-animes = pickle.load(open('anime_list.pkl','rb'))
-similarity = pickle.load(open('similarity.pkl','rb'))
+animes = pickle.load(open('anime_list.pkl', 'rb'))
+similarity = pickle.load(open('similarity.pkl', 'rb'))
 
 anime_list = animes['name'].values
-selected_anime = st.selectbox(
-    "Type or select a movie from the dropdown",
-    anime_list
-)
+selected_anime = st.selectbox("Type or select an anime from the dropdown", anime_list)
 
 if st.button('Show Recommendation'):
-    recommended_anime_names,recommended_anime_posters = recommend(selected_anime)
+    recommended_anime_names, recommended_anime_posters = recommend(selected_anime)
+
     col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.text(recommended_anime_names[0])
-        st.image(recommended_anime_posters[0])
-    with col2:
-        st.text(recommended_anime_names[1])
-        st.image(recommended_anime_posters[1])
+    columns = [col1, col2, col3, col4, col5]
 
-    with col3:
-        st.text(recommended_anime_names[2])
-        st.image(recommended_anime_posters[2])
-
-    with col4:
-        st.text(recommended_anime_names[3])
-        st.image(recommended_anime_posters[3])
-    with col5:
-        st.text(recommended_anime_names[4])
-        st.image(recommended_anime_posters[4])
+    for idx, col in enumerate(columns):
+        if idx < len(recommended_anime_names):
+            with col:
+                st.text(recommended_anime_names[idx])
+                if recommended_anime_posters[idx]:
+                    st.image(recommended_anime_posters[idx])  # Display the image in its original size
+                else:
+                    st.text("Poster not available")
